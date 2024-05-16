@@ -1,0 +1,83 @@
+version: '3'
+
+services:
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    image: bot_image
+    container_name: bot_container
+    ports:
+      - "7777:7777"
+    env_file:
+      - .env
+    networks:
+      - net
+    depends_on:
+      - db
+
+  db:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    image: db_image
+    container_name: db_container
+    ports:
+      - ${DB_PORT}:5432
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE}
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command: |
+      postgres
+      -c log_replication_commands=on
+      -c logging_collector=on
+      -c log_directory=/log
+      -c log_filename=postgresql.log
+      -c log_statement=all
+      -c wal_level=replica
+      -c hot_standby=on
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby_feedback=on
+    networks:
+      - net
+
+  db_repl:
+    build:
+      context: ./db_repl
+      dockerfile: Dockerfile
+    image: db_repl_image
+    container_name: db_repl_container
+    user: postgres
+    ports:
+      - ${DB_REPL_PORT}:5432
+    env_file:
+      - .env
+    environment:
+      PGUSER: ${DB_REPL_USER}
+      PGPASSWORD: ${DB_REPL_PASSWORD}
+    command: |
+      bash -c "
+      rm -rf /var/lib/postgresql/data/*
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=${DB_HOST} --port=${DB_PORT}
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres
+      "
+    networks:
+      - net
+    depends_on:
+      - db
+
+networks:
+  net:
+    driver: bridge
